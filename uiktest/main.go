@@ -2,8 +2,19 @@ package main
 
 import (
 	"fmt"
+	"github.com/skelterjohn/go.wde"
 	"github.com/skelterjohn/go.uik"
 )
+
+func (b *Button) handleState() {
+        for {
+                select {
+                case <-b.click:
+                        b.Label.TextCh <- "clickedLoco!"
+                }
+        }
+}
+
 
 func main() {
 	width := 480.0

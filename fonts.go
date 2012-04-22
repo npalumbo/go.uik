@@ -13,5 +13,5 @@ func init() {
 		println(err.Error())
 	}
 
-	draw2d.RegisterFont("luxisr.ttf", font)
+	draw2d.RegisterFont(draw2d.FontData{"luxi", draw2d.FontFamilyMono, draw2d.FontStyleBold|draw2d.FontStyleItalic}, font)
 }
