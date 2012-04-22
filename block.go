@@ -1,42 +1,95 @@
 package uik
 
 import (
+	"code.google.com/p/draw2d/draw2d"
+	"github.com/skelterjohn/geom"
 	"image"
 	"image/draw"
-	"code.google.com/p/draw2d/draw2d"
-	"github.com/skelterjohn/go.wde"
 )
 
 // The Block type is a basic unit that can receive events and draw itself.
+//
+// This struct essentially defines an interface, except a synchronous interface
+// based on channels rather than an asynchronous interface based on method
+// calls.
 type Block struct {
 	Parent *Foundation
 
-	ListenedChannels map[interface{}]bool
+	EventsIn chan<- interface{}
+	Events   <-chan interface{}
 
-	CloseEvents     chan wde.CloseEvent
-	MouseDownEvents chan MouseDownEvent
-	MouseUpEvents   chan MouseUpEvent
+	Subscribe chan<- Subscription
 
-	allEventsIn     chan<- interface{}
-	allEventsOut    <-chan interface{}
+	Redraw RedrawEventChan
 
-	Redraw          chan Bounds
-
-	Paint func(gc draw2d.GraphicContext)
+	Paint  func(gc draw2d.GraphicContext)
 	Buffer draw.Image
-	Compositor chan image.Image
 
-	// minimum point relative to the block's parent: only the parent should set this
-	Min Coord
+	Compositor  CompositeRequestChan
+	SizeHints   SizeHintChan
+	setSizeHint SizeHintChan
+
+	PlacementNotifications PlacementNotificationChan
+
+	HasKeyFocus bool
+
 	// size of block
-	Size Coord
+	Size geom.Coord
+}
+
+func (b *Block) Initialize() {
+	b.Paint = ClearPaint
+
+	b.EventsIn, b.Events, b.Subscribe = SubscriptionQueue(0)
+
+	b.Redraw = make(RedrawEventChan, 1)
+
+	b.PlacementNotifications = make(PlacementNotificationChan, 1)
+	b.setSizeHint = make(SizeHintChan, 1)
+
+	go b.handleSizeHints()
+}
+
+func (b *Block) HandleEvent(e interface{}) {
+	switch e := e.(type) {
+	case ResizeEvent:
+		b.Size = e.Size
+		b.PaintAndComposite()
+	case KeyFocusEvent:
+		b.HasKeyFocus = e.Focus
+	}
+}
+
+func (b *Block) SetSizeHint(sh SizeHint) {
+	b.setSizeHint <- sh
+}
+
+func (b *Block) handleSizeHints() {
+	sh := <-b.setSizeHint
+	b.SizeHints.Stack(sh)
+	for {
+		select {
+		case sh = <-b.setSizeHint:
+		case pn := <-b.PlacementNotifications:
+			b.Parent = pn.Foundation
+			b.SizeHints = pn.SizeHints
+		}
+		b.SizeHints.Stack(sh)
+	}
+}
+
+func (b *Block) Bounds() geom.Rect {
+	return geom.Rect{
+		geom.Coord{0, 0},
+		b.Size,
+	}
 }
 
 func (b *Block) PrepareBuffer() (gc draw2d.GraphicContext) {
-	min := image.Point{int(b.Min.X-1), int(b.Min.Y-1)}
-	max := image.Point{int(b.Min.X+b.Size.X+1), int(b.Min.Y+b.Size.Y+1)}
+	min := image.Point{0, 0}
+	max := image.Point{int(b.Size.X), int(b.Size.Y)}
 	if b.Buffer == nil || b.Buffer.Bounds().Min != min || b.Buffer.Bounds().Max != max {
-		b.Buffer = image.NewRGBA(image.Rectangle {
+		b.Buffer = image.NewRGBA(image.Rectangle{
 			Min: min,
 			Max: max,
 		})
@@ -45,45 +98,19 @@ func (b *Block) PrepareBuffer() (gc draw2d.GraphicContext) {
 	return
 }
 
-func (b *Block) doPaint(gc draw2d.GraphicContext) {
+func (b *Block) DoPaint(gc draw2d.GraphicContext) {
 	if b.Paint != nil {
 		b.Paint(gc)
 	}
 }
 
-func (b *Block) handleSplitEvents() {
-	for e := range b.allEventsOut {
-		switch e := e.(type) {
-		case MouseDownEvent:
-			if b.ListenedChannels[b.MouseDownEvents] {
-				b.MouseDownEvents <- e
-			}
-		case MouseUpEvent:
-			if b.ListenedChannels[b.MouseUpEvents] {
-				b.MouseUpEvents <- e
-			}
-		case wde.CloseEvent:
-			if b.ListenedChannels[b.CloseEvents] {
-				b.CloseEvents <- e
-			}
-		}
+func (b *Block) PaintAndComposite() {
+	bgc := b.PrepareBuffer()
+	b.DoPaint(bgc)
+	if b.Compositor == nil {
+		return
 	}
-}
-
-func (b *Block) BoundsInParent() (bounds Bounds) {
-	bounds.Min = b.Min
-	bounds.Max = b.Min
-	bounds.Max.X += b.Size.X
-	bounds.Max.Y += b.Size.Y
-	return
-}
-
-func (b *Block) MakeChannels() {
-	b.ListenedChannels = make(map[interface{}]bool)
-	b.CloseEvents = make(chan wde.CloseEvent)
-	b.MouseDownEvents = make(chan MouseDownEvent)
-	b.MouseUpEvents = make(chan MouseUpEvent)
-	b.Redraw = make(chan Bounds)
-	b.allEventsIn, b.allEventsOut = QueuePipe()
-	go b.handleSplitEvents()
+	CompositeRequestChan(b.Compositor).Stack(CompositeRequest{
+		Buffer: b.Buffer,
+	})
 }

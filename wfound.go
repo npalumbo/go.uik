@@ -1,17 +1,21 @@
 package uik
 
 import (
+	"github.com/skelterjohn/geom"
+	"github.com/skelterjohn/go.wde"
 	"image"
 	"image/draw"
-	"code.google.com/p/draw2d/draw2d"
-	"github.com/skelterjohn/go.wde"
+	"time"
 )
+
+const FrameDelay = 16 * 1e6
 
 // A foundation that wraps a wde.Window
 type WindowFoundation struct {
 	Foundation
-	W wde.Window
-	Done <-chan bool
+	W               wde.Window
+	waitForRepaint  chan bool
+	doRepaintWindow chan bool
 }
 
 func NewWindow(parent wde.Window, width, height int) (wf *WindowFoundation, err error) {
@@ -21,76 +25,122 @@ func NewWindow(parent wde.Window, width, height int) (wf *WindowFoundation, err 
 	if err != nil {
 		return
 	}
-	wf.MakeChannels()
+	wf.Initialize()
 
-	wf.Size = Coord{float64(width), float64(height)}
-	wf.Paint = func(gc draw2d.GraphicContext) {
-		gc.Clear()
-	}
+	wf.waitForRepaint = make(chan bool)
+	wf.doRepaintWindow = make(chan bool)
+
+	wf.Size = geom.Coord{float64(width), float64(height)}
+	wf.Paint = ClearPaint
+
+	wf.Compositor = make(chan CompositeRequest)
+	wf.HasKeyFocus = true
 
 	go wf.handleWindowEvents()
 	go wf.handleWindowDrawing()
-	go wf.handleEvents()
+	go wf.HandleEvents()
 
 	return
 }
 
+func (wf *WindowFoundation) SetBlock(b *Block) {
+	wf.PlaceBlock(b, geom.Rect{geom.Coord{}, wf.Size})
+}
+
 func (wf *WindowFoundation) Show() {
 	wf.W.Show()
-	wf.Redraw <- wf.BoundsInParent()
+	RedrawEventChan(wf.Redraw).Stack(RedrawEvent{
+		geom.Rect{
+			geom.Coord{0, 0},
+			wf.Size,
+		},
+	})
 }
 
 // wraps mouse events with float64 coordinates
 func (wf *WindowFoundation) handleWindowEvents() {
-	done := make(chan bool)
-	wf.Done = done
 	for e := range wf.W.EventChan() {
 		switch e := e.(type) {
 		case wde.CloseEvent:
-			wf.CloseEvents <- e
-			wf.W.Close()
-			done <- true
+			wf.EventsIn <- CloseEvent{
+				CloseEvent: e,
+			}
 		case wde.MouseDownEvent:
-			wf.MouseDownEvents <- MouseDownEvent{
+			wf.EventsIn <- MouseDownEvent{
 				MouseDownEvent: e,
-				MouseLocator: MouseLocator {
-					Loc: Coord{float64(e.Where.X), float64(e.Where.Y)},
+				MouseLocator: MouseLocator{
+					Loc: geom.Coord{float64(e.Where.X), float64(e.Where.Y)},
 				},
 			}
 		case wde.MouseUpEvent:
-			wf.MouseUpEvents <- MouseUpEvent{
+			wf.EventsIn <- MouseUpEvent{
 				MouseUpEvent: e,
-				MouseLocator: MouseLocator {
-					Loc: Coord{float64(e.Where.X), float64(e.Where.Y)},
+				MouseLocator: MouseLocator{
+					Loc: geom.Coord{float64(e.Where.X), float64(e.Where.Y)},
 				},
 			}
-
+		case wde.KeyDownEvent:
+			wf.EventsIn <- KeyDownEvent{
+				KeyDownEvent: e,
+			}
+		case wde.KeyUpEvent:
+			wf.EventsIn <- KeyUpEvent{
+				KeyUpEvent: e,
+			}
+		case wde.KeyTypedEvent:
+			wf.EventsIn <- KeyTypedEvent{
+				KeyTypedEvent: e,
+			}
+		case wde.ResizeEvent:
+			wf.waitForRepaint <- true
+			wf.EventsIn <- ResizeEvent{
+				ResizeEvent: e,
+				Size: geom.Coord{
+					X: float64(e.Width),
+					Y: float64(e.Height),
+				},
+			}
+			wf.Redraw <- RedrawEvent{
+				wf.Bounds(),
+			}
+			go wf.SleepRepaint(FrameDelay)
 		}
 	}
 }
 
+func (wf *WindowFoundation) SleepRepaint(delay time.Duration) {
+	time.Sleep(delay)
+	wf.doRepaintWindow <- true
+}
+
 func (wf *WindowFoundation) handleWindowDrawing() {
-	// TODO: collect a dirty region (possibly disjoint), and draw in one go?
-	wf.Compositor = make(chan image.Image)
+
+	waitingForRepaint := false
+	newStuff := false
+
+	flush := func() {
+		wf.W.FlushImage()
+		newStuff = false
+		waitingForRepaint = true
+		go wf.SleepRepaint(FrameDelay)
+	}
 
 	for {
 		select {
-		// case dirtyBounds := <-wf.Redraw:
-		// 	gc := draw2d.NewGraphicContext(wf.W.Screen())
-		// 	gc.Clear()
-		// 	gc.BeginPath()
-		// 	// TODO: pass dirtyBounds too, to avoid redrawing out of reach components
-		// 	_ = dirtyBounds
-		// 	wf.doPaint(gc)
-
-		// 	wf.Redraw <-dirtyBounds
-
-		// 	wf.W.FlushImage()
-		case buffer := <- wf.Compositor:
-			draw.Draw(wf.W.Screen(), buffer.Bounds(), buffer, image.Point{0, 0}, draw.Src)
-			// TODO: don't do this every time - give a window for all expected buffers to 
-			//       come in before flushing prematurely
-			wf.W.FlushImage()
+		case ce := <-wf.Compositor:
+			draw.Draw(wf.W.Screen(), ce.Buffer.Bounds(), ce.Buffer, image.Point{0, 0}, draw.Src)
+			if waitingForRepaint {
+				newStuff = true
+			} else {
+				flush()
+			}
+		case waitingForRepaint = <-wf.waitForRepaint:
+		case <-wf.doRepaintWindow:
+			waitingForRepaint = false
+			if !newStuff {
+				break
+			}
+			flush()
 		}
 	}
 }
