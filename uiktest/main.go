@@ -2,25 +2,12 @@ package main
 
 import (
 	"fmt"
-<<<<<<< HEAD
-	"github.com/skelterjohn/go.wde"
-=======
 	"github.com/skelterjohn/geom"
->>>>>>> upstream/master
 	"github.com/skelterjohn/go.uik"
 	"github.com/skelterjohn/go.uik/layouts"
 	"github.com/skelterjohn/go.uik/widgets"
 	"image/color"
 )
-
-func (b *Button) handleState() {
-        for {
-                select {
-                case <-b.click:
-                        b.Label.TextCh <- "clickedLoco!"
-                }
-        }
-}
 
 
 func main() {

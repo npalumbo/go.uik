@@ -55,9 +55,5 @@ func init() {
 		println(err.Error())
 	}
 
-<<<<<<< HEAD
-	draw2d.RegisterFont(draw2d.FontData{"luxi", draw2d.FontFamilyMono, draw2d.FontStyleBold|draw2d.FontStyleItalic}, font)
-=======
 	draw2d.RegisterFont(DefaultFontData, font)
->>>>>>> upstream/master
 }
