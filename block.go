@@ -29,7 +29,7 @@ type Block struct {
 	SizeHints   SizeHintChan
 	setSizeHint SizeHintChan
 
-	PlacementNotifications PlacementNotificationChan
+	placementNotifications placementNotificationChan
 
 	HasKeyFocus bool
 
@@ -44,7 +44,7 @@ func (b *Block) Initialize() {
 
 	b.Redraw = make(RedrawEventChan, 1)
 
-	b.PlacementNotifications = make(PlacementNotificationChan, 1)
+	b.placementNotifications = make(placementNotificationChan, 1)
 	b.setSizeHint = make(SizeHintChan, 1)
 
 	go b.handleSizeHints()
@@ -70,7 +70,7 @@ func (b *Block) handleSizeHints() {
 	for {
 		select {
 		case sh = <-b.setSizeHint:
-		case pn := <-b.PlacementNotifications:
+		case pn := <-b.placementNotifications:
 			b.Parent = pn.Foundation
 			b.SizeHints = pn.SizeHints
 		}
@@ -104,6 +104,15 @@ func (b *Block) DoPaint(gc draw2d.GraphicContext) {
 	}
 }
 
+func copyImage(src image.Image) (dst image.Image) {
+	di := image.NewRGBA(src.Bounds())
+	dst = di
+
+	draw.Draw(di, dst.Bounds(), src, image.Point{0, 0}, draw.Over)
+
+	return
+}
+
 func (b *Block) PaintAndComposite() {
 	bgc := b.PrepareBuffer()
 	b.DoPaint(bgc)
@@ -111,6 +120,6 @@ func (b *Block) PaintAndComposite() {
 		return
 	}
 	CompositeRequestChan(b.Compositor).Stack(CompositeRequest{
-		Buffer: b.Buffer,
+		Buffer: copyImage(b.Buffer),
 	})
 }

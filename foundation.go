@@ -95,7 +95,7 @@ func (f *Foundation) AddBlock(b *Block) {
 		}
 	}(b, sizeHints)
 
-	b.PlacementNotifications.Stack(PlacementNotification{
+	b.placementNotifications.Stack(placementNotification{
 		Foundation: f,
 		SizeHints:  sizeHints,
 	})
@@ -107,6 +107,9 @@ func (f *Foundation) PlaceBlock(b *Block, bounds geom.Rect) {
 	RedrawEventChan(f.Redraw).Stack(RedrawEvent{
 		bounds,
 	})
+	b.EventsIn <- ResizeEvent{
+		Size: geom.Coord{bounds.Max.X-bounds.Min.X, bounds.Max.Y-bounds.Min.Y},
+	}
 }
 
 func (f *Foundation) BlocksForCoord(p geom.Coord) (bs []*Block) {
@@ -159,11 +162,10 @@ func (f *Foundation) DoCompositeBlockRequest(cbr CompositeBlockRequest) {
 
 func (f *Foundation) Rebuffer() {
 	bgc := f.PrepareBuffer()
+	bgc.Clear()
 	f.DoPaint(bgc)
-	for child := range f.Children {
-		if buf, ok := f.ChildrenLastBuffers[child]; ok {
-			f.CompositeBlockBuffer(child, buf)
-		}
+	for child, buf := range f.ChildrenLastBuffers {
+		f.CompositeBlockBuffer(child, buf)
 	}
 	CompositeRequestChan(f.Compositor).Stack(CompositeRequest{
 		Buffer: f.Buffer,
